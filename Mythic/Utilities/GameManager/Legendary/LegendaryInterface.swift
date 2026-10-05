@@ -492,6 +492,14 @@ final class Legendary {
 
     @discardableResult
     static func signIn(authKey: String) async throws -> String {
+        // legendary short-circuits `auth --code` with "Stored credentials are still valid" (without logging in)
+        // if a leftover user.json is still accepted by it, even when Mythic can't use that session (see #294).
+        // Clear it so the fresh authorization code is always exchanged.
+        let clearProcess: Process = .init()
+        clearProcess.arguments = ["auth", "--delete"]
+        await transformProcess(clearProcess)
+        _ = try? await clearProcess.runWrapped()
+
         let process: Process = .init()
         process.arguments = ["auth", "--code", authKey]
         await transformProcess(process)
@@ -507,7 +515,13 @@ final class Legendary {
             return String(username)
         }
 
-        throw SignInError()
+        // surface legendary's actual reason (e.g. an `errors.com.epicgames.*` code) instead of a bare failure
+        let reason = result.standardError?
+            .split(whereSeparator: \.isNewline)
+            .last(where: { $0.contains("ERROR") })
+            .map(String.init)
+
+        throw SignInError(reason: reason)
     }
 
     static func signOut() async throws {
@@ -669,8 +683,12 @@ final class Legendary {
     static func retrieveUser() throws -> String? {
         let userURL: URL = configurationFolder.appending(path: "user.json")
         
+        // only the display name is needed here; decoding the whole `User` would report a valid session
+        // as signed out whenever Epic adds, drops or retypes an unrelated field in user.json.
+        struct DisplayName: Decodable { let displayName: String }
+
         guard let userData = try? Data(contentsOf: userURL),
-              let userObject = try? JSONDecoder().decode(User.self, from: userData) else {
+              let userObject = try? JSONDecoder().decode(DisplayName.self, from: userData) else {
             return nil
         }
 

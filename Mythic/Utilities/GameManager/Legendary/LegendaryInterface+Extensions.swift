@@ -1334,7 +1334,13 @@ extension Legendary {
     }
 
     struct SignInError: LocalizedError {
-        var errorDescription: String? = String(localized: "Unable to sign in to Epic Games.")
+        var reason: String?
+
+        var errorDescription: String? {
+            let base = String(localized: "Unable to sign in to Epic Games.")
+            guard let reason, !reason.isEmpty else { return base }
+            return base + "\n" + reason
+        }
     }
 
     struct UnsupportedInstallationPlatformError: LocalizedError {
