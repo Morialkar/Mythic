@@ -11,7 +11,7 @@ import Foundation
 import OSLog
 import AppKit
 
-@Observable class Game: Codable, Identifiable {
+@Observable class Game: Codable, Identifiable, @unchecked Sendable {
     @MainActor static let operationManager: GameOperationManager = .shared
 
     let id: String
@@ -54,6 +54,7 @@ import AppKit
 
     var launchArguments: [String] = []
     final var isFavourited: Bool = false
+    final var collections: Set<String> = .init()
     final var lastLaunched: Date?
 
     // override in subclass
@@ -81,6 +82,7 @@ import AppKit
         self._containerURL = try container.decodeIfPresent(URL.self, forKey: ._containerURL)
         self.launchArguments = try container.decode([String].self, forKey: .launchArguments)
         self.isFavourited = try container.decode(Bool.self, forKey: .isFavourited)
+        self.collections = try container.decodeIfPresent(Set<String>.self, forKey: .collections) ?? .init()
         self.lastLaunched = try container.decodeIfPresent(Date.self, forKey: .lastLaunched)
     }
 
@@ -221,6 +223,7 @@ extension Game {
         // swiftlint:enable identifier_name
         case launchArguments,
              isFavourited,
+             collections,
              lastLaunched
     }
 
@@ -236,6 +239,7 @@ extension Game {
         try container.encodeIfPresent(_containerURL, forKey: ._containerURL)
         try container.encode(launchArguments, forKey: .launchArguments)
         try container.encode(isFavourited, forKey: .isFavourited)
+        try container.encode(collections, forKey: .collections)
         try container.encodeIfPresent(lastLaunched, forKey: .lastLaunched)
     }
 }
@@ -255,6 +259,7 @@ extension Game: Mergeable {
         .init(\Game._containerURL, forCodingKey: ._containerURL, strategy: { $0 ?? $1 }),
         .init(\Game.launchArguments, forCodingKey: .launchArguments, strategy: { Array(Set($0 + $1)) }),
         .init(\Game.isFavourited, forCodingKey: .isFavourited, strategy: { $0 || $1 }),
+        .init(\Game.collections, forCodingKey: .collections, strategy: { $0.union($1) }),
         AnyMergeRule(\Game.lastLaunched, forCodingKey: .lastLaunched) { current, new in
             guard current != nil || new != nil else { return current }
             return max(current ??  .distantPast, new ?? .distantPast)

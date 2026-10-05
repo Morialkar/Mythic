@@ -144,6 +144,8 @@ struct GameListView: View {
                         Text("Not Installed")
                     case .favourited:
                         Text("Favourited")
+                    case .collection(let collection):
+                        Text(collection)
                     }
                 }
             }
