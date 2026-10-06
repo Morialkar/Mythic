@@ -59,8 +59,18 @@ final class Engine {
     /// The update stream published by Mythic, serving the stable and preview channels.
     static let officialCatalogURL = URL(string: "https://dl.getmythic.app/engine/EngineUpdateStream.plist")!
 
-    /// Where the custom channel's catalog is read from: the `engineCustomCatalogURL` setting if it holds a URL
-    /// (`https://` or `file://`), otherwise `EngineCatalog-custom.plist` in Mythic's application support folder.
+    /// The custom channel's catalog and engine archive, when they were shipped inside the app itself
+    /// (`Contents/Resources/EngineCustom/`). A preinstalled channel needs no hosting and no setup.
+    static var bundledCustomCatalogURL: URL? {
+        Bundle.main.resourceURL?
+            .appending(path: "EngineCustom/EngineCatalog-custom.plist")
+            .nilIfMissing
+    }
+
+    /// Where the custom channel's catalog is read from, first match wins:
+    /// 1. the `engineCustomCatalogURL` setting, if it holds a URL (`https://` or `file://`);
+    /// 2. `EngineCatalog-custom.plist` in Mythic's application support folder;
+    /// 3. the catalog shipped inside the app.
     static var customCatalogURL: URL {
         if let configured = UserDefaults.standard.string(forKey: "engineCustomCatalogURL")?
             .trimmingCharacters(in: .whitespacesAndNewlines),
@@ -69,7 +79,16 @@ final class Engine {
             return url
         }
 
-        return Bundle.appHome!.appending(path: "EngineCatalog-custom.plist")
+        let local = Bundle.appHome!.appending(path: "EngineCatalog-custom.plist")
+        if FileManager.default.fileExists(atPath: local.path(percentEncoded: false)) { return local }
+
+        return bundledCustomCatalogURL ?? local
+    }
+
+    /// A release's archive address. One that isn't absolute (e.g. `Engine.tar.xz`) is relative to the catalog
+    /// that lists it, which is how a catalog and its archive travel together, inside the app or on a server.
+    static func downloadURL(for release: UpdateCatalog.Release, channel: ReleaseChannel) -> URL? {
+        URL(string: release.downloadURL, relativeTo: catalogURL(for: channel))?.absoluteURL
     }
 
     static func catalogURL(for channel: ReleaseChannel) -> URL {
@@ -134,7 +153,11 @@ final class Engine {
                     guard !isInstalled else { continuation.finish(); return } // silent exit
                     let release = try await getLatestCompatibleRelease()
                     
-                    let task = URLSession.shared.downloadTask(with: URL(string: release.downloadURL)!) { file, response, error in
+                    guard let archiveURL = downloadURL(for: release, channel: releaseChannel) else {
+                        throw URLError(.badURL)
+                    }
+                    
+                    let task = URLSession.shared.downloadTask(with: archiveURL) { file, response, error in
                         guard error == nil else { continuation.finish(throwing: error!); return }
                         if let httpResponse = response as? HTTPURLResponse,
                            !(200...299).contains(httpResponse.statusCode) {
@@ -290,5 +313,12 @@ extension Engine {
             
             await errorAlert.beginSheetModal(for: window)
         }
+    }
+}
+
+private extension URL {
+    /// `self`, only if something exists there.
+    var nilIfMissing: URL? {
+        FileManager.default.fileExists(atPath: path(percentEncoded: false)) ? self : nil
     }
 }

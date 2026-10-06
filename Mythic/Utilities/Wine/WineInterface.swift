@@ -289,6 +289,20 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         }
     }
 
+    /// Stops every process in one container and waits for it to be gone.
+    static func stopAll(containerURL: URL) async {
+        lastForceStop.withLock { $0 = .now }
+        log.notice("Stopping Wine in \(containerURL.lastPathComponent)")
+
+        let process: Process = .init()
+        process.executableURL = Engine.directory.appending(path: "wine/bin/wineserver")
+        process.arguments = ["-k"]
+        process.environment = ["WINEPREFIX": containerURL.path]
+
+        _ = try? await process.runWrapped()
+        try? await Task.sleep(for: .seconds(2))
+    }
+
     static func killAll(at urls: URL...) throws {
         lastForceStop.withLock { $0 = .now }
         log.notice("Force-stopping Wine in \(urls.isEmpty ? "all containers" : urls.map(\.lastPathComponent).joined(separator: ", "))")

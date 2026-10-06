@@ -95,6 +95,150 @@ enum SteamClient {
             let output = (result.standardError ?? "").split(separator: "\n").suffix(4).joined(separator: "\n")
             throw InstallError(reason: String(localized: "The installer finished, but steam.exe isn't in the container.") + "\n" + output)
         }
+
+        if usesWebHelperWrapper {
+            try await prepareWebHelper(in: containerURL)
+        }
+    }
+
+    // MARK: - Browser wrapper
+    //
+    // On Wine 11 the client's Chromium helper paints its windows black unless it runs with software rendering in a
+    // single process. A small stand-in executable, shipped with the engine, sits where steamwebhelper.exe was and
+    // starts the real one (kept beside it as steamwebhelper_real.exe) with those options.
+
+    /// The stand-in, as shipped with the engine. Engines that don't carry it don't need it.
+    static var wrapperURL: URL {
+        Engine.directory.appending(path: "extras/steamwebhelper_wrapper.exe")
+    }
+
+    static var usesWebHelperWrapper: Bool {
+        FileManager.default.fileExists(atPath: wrapperURL.path(percentEncoded: false))
+    }
+
+    private static let wrapperMarker = Data("MYTHIC-STEAM-WRAPPER-1".utf8)
+    private static let wrapperArguments = "--disable-gpu --single-process"
+
+    private static func webHelperDirectory(in containerURL: URL) -> URL {
+        containerURL.appending(path: "drive_c/Program Files (x86)/Steam/bin/cef/cef.win64")
+    }
+
+    /// Whether steamwebhelper.exe is the stand-in rather than Steam's own file.
+    static func isWrapperInstalled(in containerURL: URL) -> Bool {
+        let helper = webHelperDirectory(in: containerURL).appending(path: "steamwebhelper.exe")
+        guard let data = try? Data(contentsOf: helper, options: .mappedIfSafe) else { return false }
+        return data.range(of: wrapperMarker) != nil
+    }
+
+    /**
+     Puts the stand-in in place of Steam's steamwebhelper.exe, and keeps Steam's own file as steamwebhelper_real.exe.
+
+     The stand-in is padded to the size of the original: at startup Steam checks its files by size and puts back
+     any that differ. Steam must not be running.
+     */
+    static func installWrapper(in containerURL: URL) throws {
+        let directory = webHelperDirectory(in: containerURL)
+        let helper = directory.appending(path: "steamwebhelper.exe")
+        let real = directory.appending(path: "steamwebhelper_real.exe")
+
+        guard FileManager.default.fileExists(atPath: helper.path(percentEncoded: false)) else {
+            throw InstallError(reason: String(localized: "Steam's browser component isn't in the container yet."))
+        }
+
+        // Steam's own file, new or updated, is what the stand-in has to start.
+        if !isWrapperInstalled(in: containerURL) {
+            try? FileManager.default.removeItem(at: real)
+            try FileManager.default.copyItem(at: helper, to: real)
+        }
+
+        let size = try FileManager.default.attributesOfItem(atPath: real.path(percentEncoded: false))[.size] as? Int ?? 0
+        var wrapper = try Data(contentsOf: wrapperURL)
+
+        guard wrapper.count <= size else {
+            throw InstallError(reason: String(localized: "The browser stand-in is larger than Steam's own file."))
+        }
+
+        wrapper.append(Data(count: size - wrapper.count))
+        try wrapper.write(to: helper, options: .atomic)
+        try Data(wrapperArguments.utf8).write(to: directory.appending(path: "steamwebhelper_args.txt"), options: .atomic)
+
+        SteamLaunchLog.record("Installed the Steam browser stand-in in \(containerURL.lastPathComponent) (\(size) bytes)")
+    }
+
+    /**
+     Lets Steam update itself and download its browser component, then puts the stand-in in place.
+
+     A fresh client updates, quits, and only fetches the browser component on a later start, so it is started up to
+     three times, and stopped each time once its files stop changing.
+     */
+    private static func prepareWebHelper(in containerURL: URL) async throws {
+        guard let executable = executableURL(in: containerURL) else {
+            throw InstallError(reason: String(localized: "The Steam client isn't installed in this container."))
+        }
+
+        let helper = webHelperDirectory(in: containerURL).appending(path: "steamwebhelper.exe")
+        let helperPath = helper.path(percentEncoded: false)
+
+        func helperSize() -> Int {
+            (try? FileManager.default.attributesOfItem(atPath: helperPath)[.size] as? Int) ?? 0
+        }
+
+        for round in 1...3 {
+            if helperSize() > 1_000_000 { break }
+
+            SteamLaunchLog.record("Letting Steam update itself (round \(round) of 3)")
+            let process = try launchClient(executable, in: containerURL, arguments: ["-no-cef-sandbox"])
+            _ = process
+
+            // The component is done when it exists and has stopped growing for a few polls.
+            var lastSize = 0, stablePolls = 0
+            let deadline = Date.now.addingTimeInterval(180)
+
+            while Date.now < deadline, stablePolls < 3 {
+                try Task.checkCancellation()
+                try await Task.sleep(for: .seconds(3))
+
+                let size = helperSize()
+                stablePolls = (size > 1_000_000 && size == lastSize) ? stablePolls + 1 : 0
+                lastSize = size
+            }
+
+            await Wine.stopAll(containerURL: containerURL)
+        }
+
+        guard helperSize() > 1_000_000 else {
+            throw InstallError(reason: String(localized: "Steam didn't download its browser component."))
+        }
+
+        try installWrapper(in: containerURL)
+    }
+
+    /// Starts steam.exe without waiting for it, sending its output to the client log.
+    private static func launchClient(_ executable: URL, in containerURL: URL, arguments: [String]) throws -> Process {
+        try? FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: logURL.path(percentEncoded: false), contents: nil)
+        let logHandle = try FileHandle(forWritingTo: logURL)
+
+        let process: Process = .init()
+        process.arguments = [executable.path(percentEncoded: false)] + arguments
+        process.currentDirectoryURL = executable.deletingLastPathComponent()
+        process.standardOutput = logHandle
+        process.standardError = logHandle
+        Wine.transformProcess(process, containerURL: containerURL)
+
+        try process.run()
+        return process
+    }
+
+    private static func launchArguments(remembered: Bool) -> [String] {
+        // The sandbox for Chromium's helper can't work under Wine; the flag is what makes the client viable at all.
+        var arguments = ["-no-cef-sandbox"]
+
+        // Steam checks its files at startup and restores any it finds different, which would undo the stand-in.
+        if usesWebHelperWrapper { arguments += ["-noverifyfiles", "-norepairfiles", "-nobootstrapupdate"] }
+
+        if remembered { arguments.append("-silent") }
+        return arguments
     }
 
     // MARK: - Running
@@ -144,20 +288,17 @@ enum SteamClient {
 
         let waited: TimeInterval = interactive ? (remembered ? 120 : 600) : 45
 
-        try? FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        FileManager.default.createFile(atPath: logURL.path(percentEncoded: false), contents: nil)
-        let logHandle = try FileHandle(forWritingTo: logURL)
+        // An update may have put Steam's own browser component back; the stand-in has to be in place before it starts.
+        if usesWebHelperWrapper, FileManager.default.fileExists(
+            atPath: webHelperDirectory(in: containerURL).appending(path: "steamwebhelper.exe").path(percentEncoded: false)
+        ), !isWrapperInstalled(in: containerURL) {
+            try installWrapper(in: containerURL)
+        }
 
-        let process: Process = .init()
-        // The sandbox for Chromium's helper can't work under Wine; the flag is what makes the client viable at all.
-        process.arguments = [executable.path(percentEncoded: false), "-no-cef-sandbox"] + (remembered ? ["-silent"] : [])
-        process.currentDirectoryURL = executable.deletingLastPathComponent()
-        process.standardOutput = logHandle
-        process.standardError = logHandle
-        Wine.transformProcess(process, containerURL: containerURL)
+        let process = try launchClient(executable, in: containerURL, arguments: launchArguments(remembered: remembered))
 
         SteamLaunchLog.record("Starting the Steam client (remembered sign-in: \(remembered), interactive: \(interactive)); waiting up to \(Int(waited)) s")
-        try process.run()
+        _ = process
 
         // The first steam.exe may exit after handing over to the real client, so only the sign-in matters.
         let deadline = Date.now.addingTimeInterval(waited)
