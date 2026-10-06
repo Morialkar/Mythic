@@ -282,11 +282,14 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         try FileManager.default.removeItem(at: d3dMetalCacheURL)
     }
 
-    private static func addRegistryKey(containerURL: URL, key: String, name: String, data: String, type: RegistryType) async throws {
+    /// - Parameter use32BitView: Writes through the 32-bit registry view, where 32-bit programs read `HKLM\Software` back.
+    internal static func addRegistryKey(containerURL: URL, key: String, name: String, data: String, type: RegistryType,
+                                        use32BitView: Bool = false) async throws {
         guard containerExists(at: containerURL) else { throw Container.DoesNotExistError() }
 
         let process: Process = .init()
         process.arguments = ["reg", "add", key, "-v", name, "-t", type.rawValue, "-d", data, "-f"]
+        if use32BitView { process.arguments?.append("/reg:32") }
         transformProcess(process, containerURL: containerURL)
         
         try process.run()

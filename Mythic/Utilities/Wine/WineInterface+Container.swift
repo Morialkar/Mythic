@@ -8,6 +8,7 @@
 // Copyright © 2023-2025 vapidinfinity
 
 import Foundation
+import CoreGraphics
 import OSLog
 
 extension Wine {
@@ -108,13 +109,22 @@ extension Wine.Container {
         var scaling: Int
         var avx2: Bool
 
+        /// Whether the main display renders at more than one pixel per point.
+        ///
+        /// Retina mode and 192 DPI only make sense there: on a standard display they enlarge DPI-aware windows
+        /// and shrink everything else, so new containers default to them off.
+        static var isMainDisplayHiDPI: Bool {
+            guard let mode = CGDisplayCopyDisplayMode(CGMainDisplayID()) else { return false }
+            return mode.pixelWidth > mode.width
+        }
+
         init(metalHUD: Bool = false,
              msync: Bool = true,
-             retinaMode: Bool = true,
+             retinaMode: Bool = Settings.isMainDisplayHiDPI,
              dxvk: Bool = false,
              dxvkAsync: Bool = false,
              windowsVersion: Wine.WindowsVersion = .win11,
-             scaling: Int = 192,
+             scaling: Int = Settings.isMainDisplayHiDPI ? 192 : 96,
              avx2: Bool = true) {
             self.metalHUD = metalHUD
             self.msync = msync

@@ -245,6 +245,23 @@ final class SteamGameManager {
     }
 
     /// Whether the container has a Steam client executable for Steamworks titles to talk to.
+    /// Replays the registry entries from the game's `installscript.vdf`, which Steam applies on install but SteamCMD doesn't.
+    /// Best effort: a failure is logged rather than thrown, since most titles launch fine without them.
+    private static func applyInstallScriptRegistry(installDirectory: URL, containerURL: URL) async {
+        do {
+            for value in try SteamInstallScript.registryValues(inInstallDirectory: installDirectory) {
+                try await Wine.addRegistryKey(containerURL: containerURL,
+                                              key: value.key,
+                                              name: value.name,
+                                              data: value.data,
+                                              type: value.isDWORD ? .dword : .string,
+                                              use32BitView: value.usesWow64View)
+            }
+        } catch {
+            log.error("Unable to apply installscript registry entries in \(installDirectory.prettyPath): \(error.localizedDescription)")
+        }
+    }
+
     private static func containerHasSteamClient(at containerURL: URL) -> Bool {
         let steamDirectory = containerURL.appending(path: "drive_c/Program Files (x86)/Steam")
 
@@ -388,6 +405,8 @@ final class SteamGameManager {
                 if UserDefaults.standard.bool(forKey: "minimiseOnGameLaunch") {
                     await MainActor.run { NSApp.windows.first?.miniaturize(nil) }
                 }
+
+                await applyInstallScriptRegistry(installDirectory: location, containerURL: containerURL)
 
                 let process: Process = .init()
                 process.arguments = [executableURL.path] + arguments
