@@ -20,6 +20,7 @@ struct ContainerSettingsView: View {
     @State private var retinaMode: Bool = Wine.Container.Settings().retinaMode
     @State private var modifyingRetinaMode: Bool = true // keep progressview displayed until async fetching is complete
     @State private var retinaModeSuccess: Bool?
+    @State private var retinaModeError: Error?
 
     @State private var isDXVKDisclaimerPresented: Bool = false
     @State private var modifyingDXVK: Bool = false
@@ -43,7 +44,14 @@ struct ContainerSettingsView: View {
                 }
             }
         } catch {
-            retinaModeSuccess = false
+            // fall back to the saved setting rather than leaving the toggle disabled behind a spinner
+            let storedRetinaMode = try? Wine.getContainerObject(at: selectedContainerURL).settings.retinaMode
+
+            await MainActor.run {
+                if let storedRetinaMode { retinaMode = storedRetinaMode }
+                withAnimation { modifyingRetinaMode = false }
+                retinaModeSuccess = false
+            }
         }
     }
 
@@ -105,9 +113,23 @@ struct ContainerSettingsView: View {
                         observing: $retinaMode,
                         placement: .leading
                     ) {
-                        try? await Wine.toggleRetinaMode(containerURL: container.url, toggle: retinaMode)
-                        container.settings.retinaMode = retinaMode
-                        retinaModeSuccess = true
+                        do {
+                            try await Wine.toggleRetinaMode(containerURL: container.url, toggle: retinaMode)
+                            container.settings.retinaMode = retinaMode
+                            retinaModeSuccess = true
+                        } catch {
+                            retinaModeSuccess = false
+                            retinaModeError = error
+                        }
+                    }
+                    .alert(
+                        "Unable to change Retina Mode.",
+                        isPresented: Binding(get: { retinaModeError != nil },
+                                             set: { if !$0 { retinaModeError = nil } })
+                    ) {
+                        Button("OK", role: .cancel) { }
+                    } message: {
+                        Text(retinaModeError?.localizedDescription ?? "An unknown error occurred.")
                     }
 
                 Toggle("Enhanced Sync (MSync)", isOn: Binding(
