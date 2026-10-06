@@ -238,6 +238,94 @@ final class SteamGameManager {
         return operation
     }
 
+    /// Runs a Windows title through Wine, and reports it if it stops straight away.
+    private static func runWindowsTitle(title: String,
+                                        location: URL,
+                                        executableURL: URL,
+                                        arguments: [String],
+                                        containerURL: URL) async throws {
+        let container = try Wine.getContainerObject(at: containerURL)
+
+        await applyInstallScriptRegistry(installDirectory: location, containerURL: containerURL)
+
+        let process: Process = .init()
+        process.arguments = [executableURL.path] + arguments
+        // Games resolve their own data relative to the working directory; Steam sets it to the
+        // install directory and so must we.
+        process.currentDirectoryURL = location
+        // Environment first: `transformProcess` replaces `process.environment` wholesale.
+        process.environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: container.url)
+        Wine.transformProcess(process, containerURL: containerURL)
+
+        let diagnostics: LaunchDiagnostics = .init()
+        let startedAt: Date = .now
+
+        try await withTaskCancellationHandler {
+            // Streamed rather than fire-and-forget: when a game fails to start it explains itself
+            // on stderr, and that explanation was previously discarded.
+            try await process.runStreamed(throwsOnChunkError: false) { chunk in
+                diagnostics.record(chunk.output)
+                return nil
+            }
+        } onCancel: {
+            process.interrupt()
+        }
+
+        let duration = Date.now.timeIntervalSince(startedAt)
+        log.notice("\(title) exited with status \(process.terminationStatus) after \(duration, format: .fixed(precision: 1)) s")
+
+        // A clean exit is usually a launcher handing off to the game, not a failure to start.
+        // A launcher exits cleanly after starting the game, so look at what is left running instead.
+        if process.terminationStatus == 0, duration < sessionWatchLimit {
+            let handoffAt = Date.now
+            let stillRunning = !(await Wine.waitUntilIdle(containerURL: containerURL, timeout: sessionWatchWindow))
+            let idleAfter = Date.now.timeIntervalSince(handoffAt)
+            let stoppedByMythic = Wine.lastForceStop.withLock { $0.map { $0 >= startedAt } ?? false }
+
+            let outcome = stillRunning ? "still running" : "idle after \(idleAfter.formatted(.number.precision(.fractionLength(1)))) s"
+            log.notice("\(title) launcher exited after \(duration.formatted(.number.precision(.fractionLength(1)))) s; container \(outcome); force-stopped by Mythic: \(stoppedByMythic)")
+
+            if !stillRunning {
+                throw SessionEndedError(
+                    title: title,
+                    launcherDuration: duration,
+                    idleAfter: idleAfter,
+                    stoppedByMythic: stoppedByMythic,
+                    isSteamClientMissing: !containerHasSteamClient(at: containerURL)
+                )
+            }
+        }
+
+        guard duration >= immediateExitThreshold || process.terminationStatus == 0 else {
+            log.error("\(title) closed immediately; output tail:\n\(diagnostics.tail, privacy: .public)")
+            throw ImmediateExitError(
+                title: title,
+                isSteamClientMissing: !containerHasSteamClient(at: containerURL),
+                output: diagnostics.tail,
+                exitStatus: process.terminationStatus,
+                duration: duration
+            )
+        }
+    }
+
+    /// Asks before downloading anything: the client is a sizeable install the user didn't ask for by name.
+    @MainActor private static func confirmSteamClientInstall(for title: String) -> Bool {
+        let alert: NSAlert = .init()
+        alert.messageText = String(localized: "Install the Steam client?")
+        alert.informativeText = String(localized: """
+            \(title) closed right after starting. Titles that use Steamworks need the Steam client running in their container.
+
+            Mythic can download Valve's official installer (about 2 MB) and install it in this container. \
+            Steam then downloads its own updates (several hundred MB), and you'll sign in to Steam once.
+
+            This depends on the Wine version Mythic Engine is built on, and may not work on every one.
+            """)
+        alert.addButton(withTitle: String(localized: "Install"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
     /**
      Maps SteamCMD's progress line onto `Progress`.
 
@@ -453,71 +541,30 @@ final class SteamGameManager {
 
             case .windows:
                 guard let containerURL = game.containerURL else { throw Wine.Container.DoesNotExistError() }
-                let container = try Wine.getContainerObject(at: containerURL)
+                _ = try Wine.getContainerObject(at: containerURL)
 
                 if UserDefaults.standard.bool(forKey: "minimiseOnGameLaunch") {
                     await MainActor.run { NSApp.windows.first?.miniaturize(nil) }
                 }
 
-                await applyInstallScriptRegistry(installDirectory: location, containerURL: containerURL)
-
-                let process: Process = .init()
-                process.arguments = [executableURL.path] + arguments
-                // Games resolve their own data relative to the working directory; Steam sets it to the
-                // install directory and so must we.
-                process.currentDirectoryURL = location
-                // Environment first: `transformProcess` replaces `process.environment` wholesale.
-                process.environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: container.url)
-                Wine.transformProcess(process, containerURL: containerURL)
-
-                let diagnostics: LaunchDiagnostics = .init()
-                let startedAt: Date = .now
-
-                try await withTaskCancellationHandler {
-                    // Streamed rather than fire-and-forget: when a game fails to start it explains itself
-                    // on stderr, and that explanation was previously discarded.
-                    try await process.runStreamed(throwsOnChunkError: false) { chunk in
-                        diagnostics.record(chunk.output)
-                        return nil
-                    }
-                } onCancel: {
-                    process.interrupt()
+                // An installed client is always started first: Steamworks titles look for it, the rest ignore it.
+                if SteamClient.isInstalled(in: containerURL) {
+                    try await SteamClient.ensureRunning(in: containerURL)
                 }
 
-                let duration = Date.now.timeIntervalSince(startedAt)
-                log.notice("\(title) exited with status \(process.terminationStatus) after \(duration, format: .fixed(precision: 1)) s")
+                do {
+                    try await runWindowsTitle(title: title, location: location, executableURL: executableURL,
+                                              arguments: arguments, containerURL: containerURL)
+                } catch let error where error is ImmediateExitError || error is SessionEndedError {
+                    // Only worth offering when the missing client is plausibly why the title stopped.
+                    guard !SteamClient.isInstalled(in: containerURL),
+                          await confirmSteamClientInstall(for: title) else { throw error }
 
-                // A clean exit is usually a launcher handing off to the game, not a failure to start.
-                // A launcher exits cleanly after starting the game, so look at what is left running instead.
-                if process.terminationStatus == 0, duration < sessionWatchLimit {
-                    let handoffAt = Date.now
-                    let stillRunning = !(await Wine.waitUntilIdle(containerURL: containerURL, timeout: sessionWatchWindow))
-                    let idleAfter = Date.now.timeIntervalSince(handoffAt)
-                    let stoppedByMythic = Wine.lastForceStop.withLock { $0.map { $0 >= startedAt } ?? false }
+                    try await SteamClient.install(in: containerURL)
+                    try await SteamClient.ensureRunning(in: containerURL)
 
-                    let outcome = stillRunning ? "still running" : "idle after \(idleAfter.formatted(.number.precision(.fractionLength(1)))) s"
-                    log.notice("\(title) launcher exited after \(duration.formatted(.number.precision(.fractionLength(1)))) s; container \(outcome); force-stopped by Mythic: \(stoppedByMythic)")
-
-                    if !stillRunning {
-                        throw SessionEndedError(
-                            title: title,
-                            launcherDuration: duration,
-                            idleAfter: idleAfter,
-                            stoppedByMythic: stoppedByMythic,
-                            isSteamClientMissing: !containerHasSteamClient(at: containerURL)
-                        )
-                    }
-                }
-
-                guard duration >= immediateExitThreshold || process.terminationStatus == 0 else {
-                    log.error("\(title) closed immediately; output tail:\n\(diagnostics.tail, privacy: .public)")
-                    throw ImmediateExitError(
-                        title: title,
-                        isSteamClientMissing: !containerHasSteamClient(at: containerURL),
-                        output: diagnostics.tail,
-                        exitStatus: process.terminationStatus,
-                        duration: duration
-                    )
+                    try await runWindowsTitle(title: title, location: location, executableURL: executableURL,
+                                              arguments: arguments, containerURL: containerURL)
                 }
             }
         }
