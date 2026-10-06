@@ -91,19 +91,31 @@ final class SteamGameManager {
         let exitStatus: Int32
         let duration: TimeInterval
 
-        var errorDescription: String? {
-            let summary = isSteamClientMissing
-                ? String(localized: """
-                    \(title) closed immediately.
-                    Titles that use Steamworks need the Steam client installed in their container, and this one hasn't got it.
+        /// What the output says went wrong, when it says so; Wine is specific about the failures it knows.
+        private var diagnosis: String? {
+            if output.contains("msync_init") || output.localizedCaseInsensitiveContains("stale wineserver") {
+                return String(localized: """
+                    A leftover Wine process from an earlier session is blocking this launch.
+                    Quit Mythic, make sure no Wine processes are left running (or restart your Mac), and try again.
                     """)
-                : String(localized: "\(title) closed immediately after starting.")
+            }
 
-            // A launcher that hands off to the game and quits also trips this, so say what actually happened.
-            let details = String(localized: "Exit status \(exitStatus) after \(duration.formatted(.number.precision(.fractionLength(1)))) s.")
-            let tail = output.split(separator: "\n").suffix(6).joined(separator: "\n")
+            // Only a guess, so only offered when nothing more specific was found.
+            if isSteamClientMissing {
+                return String(localized: "If this title uses Steamworks, it may need the Steam client installed in this container.")
+            }
 
-            return [summary, details, tail].filter { !$0.isEmpty }.joined(separator: "\n")
+            return nil
+        }
+
+        var errorDescription: String? {
+            let duration = duration.formatted(.number.precision(.fractionLength(1)))
+            let summary = String(localized: "\(title) stopped right after starting (exit status \(exitStatus), after \(duration) s).")
+            let tail = output.split(separator: "\n").suffix(4).joined(separator: "\n")
+
+            return [summary, diagnosis, tail.isEmpty ? nil : String(localized: "Wine reported:") + "\n" + tail]
+                .compactMap { $0 }
+                .joined(separator: "\n\n")
         }
 
         var failureReason: String? { output.isEmpty ? nil : output }
@@ -440,7 +452,8 @@ final class SteamGameManager {
                 let duration = Date.now.timeIntervalSince(startedAt)
                 log.notice("\(title) exited with status \(process.terminationStatus) after \(duration, format: .fixed(precision: 1)) s")
 
-                guard duration >= immediateExitThreshold else {
+                // A clean exit is usually a launcher handing off to the game, not a failure to start.
+                guard duration >= immediateExitThreshold || process.terminationStatus == 0 else {
                     log.error("\(title) closed immediately; output tail:\n\(diagnostics.tail, privacy: .public)")
                     throw ImmediateExitError(
                         title: title,
