@@ -92,9 +92,14 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
     /// This will modify `executableURL`, and `environment`, and will passthrough existing values.
     static func transformProcess(_ process: Process, containerURL: URL) {
         process.executableURL = Engine.directory.appending(path: "wine/bin/wine64")
-        
-        let capturedEnvironment = process.environment
-        process.environment = constructEnvironment(with: containerURL, additionalVariables: capturedEnvironment ?? [:])
+
+        // Whichever process first starts a prefix's wineserver decides whether msync is in use, and every
+        // later process must agree, or it fails with `msync_init`. So a helper such as `reg` has to carry the
+        // container's environment too, not just the game that follows it.
+        var environment = (try? assembleEnvironmentVariables(forContainerAtURL: containerURL)) ?? [:]
+        environment.merge(process.environment ?? [:], uniquingKeysWith: { $1 })
+
+        process.environment = constructEnvironment(with: containerURL, additionalVariables: environment)
     }
 
     static func tasklist(for containerURL: URL) async throws -> [Container.Process] {
