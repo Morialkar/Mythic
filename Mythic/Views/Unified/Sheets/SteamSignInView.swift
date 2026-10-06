@@ -210,10 +210,10 @@ struct SteamSignInView: View {
             .padding([.horizontal, .bottom])
         }
         .task {
-            // Both touch the filesystem (Rosetta.exists spawns pgrep), so they are resolved once here
+            // Both touch the filesystem (Rosetta.isInstalled spawns pgrep), so they are resolved once here
             // rather than re-evaluated on every render of `body`.
             isSteamCMDInstalled = SteamCMD.isInstalled
-            isRosettaInstalled = Rosetta.exists
+            isRosettaInstalled = Rosetta.isInstalled
         }
         .alert("Unable to install SteamCMD.",
                isPresented: .init(get: { steamCMDInstallError != nil },

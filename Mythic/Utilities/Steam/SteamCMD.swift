@@ -107,7 +107,7 @@ final class SteamCMD {
 
     /// Downloads and unpacks SteamCMD into ``directory``.
     static func install() async throws {
-        guard Rosetta.exists else { throw Failure.rosettaMissing }
+        guard Rosetta.isInstalled else { throw Failure.rosettaMissing }
 
         let fileManager: FileManager = .default
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -273,7 +273,7 @@ final class SteamCMD {
         stopOnFailedCommand: Bool = false
     ) async throws -> String {
         guard isInstalled else { throw Failure.notInstalled }
-        guard Rosetta.exists else { throw Failure.rosettaMissing }
+        guard Rosetta.isInstalled else { throw Failure.rosettaMissing }
 
         await SessionGate.shared.acquire()
         defer { Task { await SessionGate.shared.release() } }
@@ -312,7 +312,7 @@ final class SteamCMD {
         onLine: (@Sendable (SteamCMDOutput.Line) -> Void)? = nil
     ) async throws -> Process {
         guard isInstalled else { throw Failure.notInstalled }
-        guard Rosetta.exists else { throw Failure.rosettaMissing }
+        guard Rosetta.isInstalled else { throw Failure.rosettaMissing }
 
         await SessionGate.shared.acquire()
         defer { Task { await SessionGate.shared.release() } }

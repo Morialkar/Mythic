@@ -478,7 +478,7 @@ extension SettingsView {
                 // Both of these touch the filesystem (and Rosetta spawns `pgrep`), so they are resolved
                 // once here rather than re-evaluated on every render of `body`.
                 isSteamCMDInstalled = SteamCMD.isInstalled
-                isRosettaInstalled = Rosetta.exists
+                isRosettaInstalled = Rosetta.isInstalled
             }
         }
     }
