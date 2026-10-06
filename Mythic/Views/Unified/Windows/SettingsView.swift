@@ -238,6 +238,7 @@ extension SettingsView {
 
         @AppStorage("engineChannel") private var engineChannel: String = Engine.ReleaseChannel.stable.rawValue
         @State private var isEngineChannelChangeAlertPresented: Bool = false
+        @AppStorage("engineCustomCatalogURL") private var engineCustomCatalogURL: String = .init()
 
         @State private var isEngineInstallationViewPresented: Bool = false
         @State private var engineInstallationError: Error?
@@ -281,6 +282,14 @@ extension SettingsView {
                             Experimental new features may be available in this channel, at the cost of stability.
                             Use at your own risk.
                             """)
+
+                    Text("Custom")
+                        .tag(Engine.ReleaseChannel.custom.rawValue)
+                        .help("""
+                            Engines that aren't published by Mythic, such as a Wine 11 based build.
+                            The catalog is read from the address below, or from EngineCatalog-custom.plist
+                            in Mythic's application support folder when it is empty.
+                            """)
                 }
                 .onChange(of: engineChannel) {
                     isEngineChannelChangeAlertPresented = true
@@ -313,6 +322,13 @@ extension SettingsView {
                         installationComplete: $engineInstallationSuccessful
                     )
                     .padding()
+                }
+
+                if engineChannel == Engine.ReleaseChannel.custom.rawValue {
+                    TextField("Custom catalog address", text: $engineCustomCatalogURL,
+                              prompt: Text("https://… or file:///…/EngineCatalog-custom.plist"))
+                        .textFieldStyle(.roundedBorder)
+                        .autocorrectionDisabled()
                 }
 
                 Toggle("Automatically check for Mythic Engine updates", systemImage: "arrow.down.app.dashed", isOn: $engineAutomaticallyChecksForUpdates)

@@ -59,6 +59,9 @@ extension Engine {
     enum ReleaseChannel: String, Codable {
         case stable
         case preview
+        /// Engines that aren't published through Mythic's own update stream, such as a Wine 11 based build.
+        /// Its catalog comes from ``Engine/customCatalogURL`` rather than the official one.
+        case custom
     }
 }
 // swiftlint:enable nesting

@@ -56,8 +56,28 @@ final class Engine {
         }
     }
     
-    static func retrieveUpdateCatalog() async throws -> UpdateCatalog {
-        let catalogURL = URL(string: "https://dl.getmythic.app/engine/EngineUpdateStream.plist")!
+    /// The update stream published by Mythic, serving the stable and preview channels.
+    static let officialCatalogURL = URL(string: "https://dl.getmythic.app/engine/EngineUpdateStream.plist")!
+
+    /// Where the custom channel's catalog is read from: the `engineCustomCatalogURL` setting if it holds a URL
+    /// (`https://` or `file://`), otherwise `EngineCatalog-custom.plist` in Mythic's application support folder.
+    static var customCatalogURL: URL {
+        if let configured = UserDefaults.standard.string(forKey: "engineCustomCatalogURL")?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !configured.isEmpty,
+           let url = URL(string: configured), url.scheme != nil {
+            return url
+        }
+
+        return Bundle.appHome!.appending(path: "EngineCatalog-custom.plist")
+    }
+
+    static func catalogURL(for channel: ReleaseChannel) -> URL {
+        channel == .custom ? customCatalogURL : officialCatalogURL
+    }
+
+    static func retrieveUpdateCatalog(for channel: ReleaseChannel = releaseChannel) async throws -> UpdateCatalog {
+        let catalogURL = catalogURL(for: channel)
         let (data, response) = try await URLSession.shared.data(from: catalogURL)
         if let httpResponse = response as? HTTPURLResponse,
            !(200...299).contains(httpResponse.statusCode) {
@@ -90,7 +110,7 @@ final class Engine {
     }
     
     static func getLatestCompatibleRelease(for channelName: ReleaseChannel = releaseChannel) async throws -> UpdateCatalog.Release {
-        let catalog = try await retrieveUpdateCatalog()
+        let catalog = try await retrieveUpdateCatalog(for: channelName)
         
         guard let channel = catalog.channels[channelName],
               let latestCompatibleRelease = channel.latestCompatibleRelease else {
