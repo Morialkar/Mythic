@@ -28,6 +28,50 @@ enum SteamInstallScript {
         var usesWow64View: Bool { key.uppercased().hasPrefix(#"HKLM\SOFTWARE"#) }
     }
 
+    private static let fullHiveNames: [String: String] = [
+        "HKLM": "HKEY_LOCAL_MACHINE",
+        "HKCU": "HKEY_CURRENT_USER",
+        "HKCR": "HKEY_CLASSES_ROOT"
+    ]
+
+    /**
+     Renders `values` as a `.reg` file for `regedit /S`.
+
+     This is used instead of `reg add` because Wine doubles a trailing backslash passed through the command
+     line, which turns `...\72850\` into `...\72850\\` — a corrupted `Installed Path`.
+     */
+    static func regFileContents(for values: [RegistryValue]) -> String {
+        func escaped(_ text: String) -> String {
+            text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        }
+
+        var lines = ["Windows Registry Editor Version 5.00", ""]
+
+        for (key, group) in Dictionary(grouping: values, by: \.key).sorted(by: { $0.key < $1.key }) {
+            let parts = key.split(separator: "\\", maxSplits: 1)
+            guard parts.count == 2, let hive = fullHiveNames[String(parts[0])] else { continue }
+
+            var path = String(parts[1])
+            // The 32-bit view of HKLM\Software lives under Wow6432Node.
+            if group[0].usesWow64View, path.lowercased().hasPrefix("software\\") {
+                path = "Software\\Wow6432Node\\" + path.dropFirst("software\\".count)
+            }
+
+            lines.append("[\(hive)\\\(path)]")
+            for value in group {
+                if value.isDWORD {
+                    guard let number = UInt32(value.data) else { continue }
+                    lines.append("\"\(escaped(value.name))\"=dword:\(String(format: "%08x", number))")
+                } else {
+                    lines.append("\"\(escaped(value.name))\"=\"\(escaped(value.data))\"")
+                }
+            }
+            lines.append("")
+        }
+
+        return lines.joined(separator: "\r\n")
+    }
+
     private static let hives: [String: String] = [
         "hkey_local_machine": "HKLM",
         "hkey_current_user": "HKCU",

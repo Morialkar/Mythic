@@ -86,16 +86,24 @@ final class SteamGameManager {
     struct ImmediateExitError: LocalizedError {
         let title: String
         let isSteamClientMissing: Bool
-        /// Tail of the process's own output, for the log rather than the alert.
+        /// Tail of the process's own output.
         let output: String
+        let exitStatus: Int32
+        let duration: TimeInterval
 
         var errorDescription: String? {
-            isSteamClientMissing
+            let summary = isSteamClientMissing
                 ? String(localized: """
                     \(title) closed immediately.
                     Titles that use Steamworks need the Steam client installed in their container, and this one hasn't got it.
                     """)
                 : String(localized: "\(title) closed immediately after starting.")
+
+            // A launcher that hands off to the game and quits also trips this, so say what actually happened.
+            let details = String(localized: "Exit status \(exitStatus) after \(duration.formatted(.number.precision(.fractionLength(1)))) s.")
+            let tail = output.split(separator: "\n").suffix(6).joined(separator: "\n")
+
+            return [summary, details, tail].filter { !$0.isEmpty }.joined(separator: "\n")
         }
 
         var failureReason: String? { output.isEmpty ? nil : output }
@@ -249,14 +257,12 @@ final class SteamGameManager {
     /// Best effort: a failure is logged rather than thrown, since most titles launch fine without them.
     private static func applyInstallScriptRegistry(installDirectory: URL, containerURL: URL) async {
         do {
-            for value in try SteamInstallScript.registryValues(inInstallDirectory: installDirectory) {
-                try await Wine.addRegistryKey(containerURL: containerURL,
-                                              key: value.key,
-                                              name: value.name,
-                                              data: value.data,
-                                              type: value.isDWORD ? .dword : .string,
-                                              use32BitView: value.usesWow64View)
-            }
+            let values = try SteamInstallScript.registryValues(inInstallDirectory: installDirectory)
+            guard !values.isEmpty else { return }
+
+            log.notice("Applying \(values.count) installscript registry value(s) in \(containerURL.lastPathComponent)")
+            try await Wine.importRegistry(containerURL: containerURL,
+                                          contents: SteamInstallScript.regFileContents(for: values))
         } catch {
             log.error("Unable to apply installscript registry entries in \(installDirectory.prettyPath): \(error.localizedDescription)")
         }
@@ -431,11 +437,17 @@ final class SteamGameManager {
                     process.interrupt()
                 }
 
-                guard Date.now.timeIntervalSince(startedAt) >= immediateExitThreshold else {
+                let duration = Date.now.timeIntervalSince(startedAt)
+                log.notice("\(title) exited with status \(process.terminationStatus) after \(duration, format: .fixed(precision: 1)) s")
+
+                guard duration >= immediateExitThreshold else {
+                    log.error("\(title) closed immediately; output tail:\n\(diagnostics.tail, privacy: .public)")
                     throw ImmediateExitError(
                         title: title,
                         isSteamClientMissing: !containerHasSteamClient(at: containerURL),
-                        output: diagnostics.tail
+                        output: diagnostics.tail,
+                        exitStatus: process.terminationStatus,
+                        duration: duration
                     )
                 }
             }

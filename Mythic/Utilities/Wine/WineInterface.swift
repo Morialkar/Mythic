@@ -282,20 +282,37 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         try FileManager.default.removeItem(at: d3dMetalCacheURL)
     }
 
-    /// - Parameter use32BitView: Writes through the 32-bit registry view, where 32-bit programs read `HKLM\Software` back.
-    internal static func addRegistryKey(containerURL: URL, key: String, name: String, data: String, type: RegistryType,
-                                        use32BitView: Bool = false) async throws {
+    private static func addRegistryKey(containerURL: URL, key: String, name: String, data: String, type: RegistryType) async throws {
         guard containerExists(at: containerURL) else { throw Container.DoesNotExistError() }
 
         let process: Process = .init()
         process.arguments = ["reg", "add", key, "-v", name, "-t", type.rawValue, "-d", data, "-f"]
-        if use32BitView { process.arguments?.append("/reg:32") }
         transformProcess(process, containerURL: containerURL)
         
         try process.run()
         
         process.waitUntilExit()
         
+        try process.checkTerminationStatus()
+    }
+
+    /// Merges a `.reg` file's contents into the container's registry.
+    /// Prefer this over `reg add` for values ending in a backslash, which Wine doubles on the command line.
+    static func importRegistry(containerURL: URL, contents: String) async throws {
+        guard containerExists(at: containerURL) else { throw Container.DoesNotExistError() }
+
+        let fileURL = FileManager.default.temporaryDirectory.appending(path: "mythic-\(UUID().uuidString).reg")
+        try contents.write(to: fileURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        let process: Process = .init()
+        process.arguments = ["regedit", "/S", fileURL.path(percentEncoded: false)]
+        transformProcess(process, containerURL: containerURL)
+
+        try process.run()
+
+        process.waitUntilExit()
+
         try process.checkTerminationStatus()
     }
 
