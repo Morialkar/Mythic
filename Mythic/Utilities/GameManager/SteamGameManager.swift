@@ -121,8 +121,43 @@ final class SteamGameManager {
         var failureReason: String? { output.isEmpty ? nil : output }
     }
 
+    /**
+     A launcher that handed off to a game which then stopped almost at once.
+
+     Reported in the same spirit as ``ImmediateExitError``: the launcher exits cleanly by design, so that exit
+     says nothing about the game it started. Whether the whole container went quiet right afterwards does.
+     */
+    struct SessionEndedError: LocalizedError {
+        let title: String
+        let launcherDuration: TimeInterval
+        /// How long after the launcher exited the container had nothing left running.
+        let idleAfter: TimeInterval
+        let stoppedByMythic: Bool
+        let isSteamClientMissing: Bool
+
+        var errorDescription: String? {
+            let idleAfter = idleAfter.formatted(.number.precision(.fractionLength(1)))
+            let launcherDuration = launcherDuration.formatted(.number.precision(.fractionLength(1)))
+
+            return [
+                String(localized: "Nothing was left running \(idleAfter) s after \(title)'s launcher closed (it had been open \(launcherDuration) s)."),
+                stoppedByMythic
+                    ? String(localized: "Mythic force-stopped Wine in that time.")
+                    : String(localized: "Mythic did not stop it; the game stopped by itself."),
+                isSteamClientMissing ? String(localized: "This container has no Steam client installed.") : nil
+            ]
+            .compactMap { $0 }
+            .joined(separator: "\n")
+        }
+    }
+
     /// A launch that ends sooner than this is treated as a failure to start rather than a short session.
     private static let immediateExitThreshold: TimeInterval = 15
+
+    /// After a launcher exits cleanly, how long to wait for the container to go quiet, and the longest launcher
+    /// session that is still treated as a hand-off rather than a game played to the end.
+    private static let sessionWatchWindow: TimeInterval = 10
+    private static let sessionWatchLimit: TimeInterval = 120
 
     // MARK: - Acquisition
     //
@@ -453,6 +488,27 @@ final class SteamGameManager {
                 log.notice("\(title) exited with status \(process.terminationStatus) after \(duration, format: .fixed(precision: 1)) s")
 
                 // A clean exit is usually a launcher handing off to the game, not a failure to start.
+                // A launcher exits cleanly after starting the game, so look at what is left running instead.
+                if process.terminationStatus == 0, duration < sessionWatchLimit {
+                    let handoffAt = Date.now
+                    let stillRunning = !(await Wine.waitUntilIdle(containerURL: containerURL, timeout: sessionWatchWindow))
+                    let idleAfter = Date.now.timeIntervalSince(handoffAt)
+                    let stoppedByMythic = Wine.lastForceStop.withLock { $0.map { $0 >= startedAt } ?? false }
+
+                    let outcome = stillRunning ? "still running" : "idle after \(idleAfter.formatted(.number.precision(.fractionLength(1)))) s"
+                    log.notice("\(title) launcher exited after \(duration.formatted(.number.precision(.fractionLength(1)))) s; container \(outcome); force-stopped by Mythic: \(stoppedByMythic)")
+
+                    if !stillRunning {
+                        throw SessionEndedError(
+                            title: title,
+                            launcherDuration: duration,
+                            idleAfter: idleAfter,
+                            stoppedByMythic: stoppedByMythic,
+                            isSteamClientMissing: !containerHasSteamClient(at: containerURL)
+                        )
+                    }
+                }
+
                 guard duration >= immediateExitThreshold || process.terminationStatus == 0 else {
                     log.error("\(title) closed immediately; output tail:\n\(diagnostics.tail, privacy: .public)")
                     throw ImmediateExitError(

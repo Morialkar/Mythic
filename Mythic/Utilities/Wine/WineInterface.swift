@@ -9,6 +9,7 @@
 
 import Foundation
 import OSLog
+import os
 import SemanticVersion
 
 final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
@@ -254,7 +255,44 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         containerURLs.remove(containerURL)
     }
 
+    /// When Mythic last force-stopped Wine, so a launch that ends abruptly can say whether Mythic was responsible.
+    static let lastForceStop: OSAllocatedUnfairLock<Date?> = .init(initialState: nil)
+
+    /// Waits until every process in the container has exited.
+    /// - Returns: `true` if the container went idle within `timeout`, `false` if something was still running.
+    static func waitUntilIdle(containerURL: URL, timeout: TimeInterval) async -> Bool {
+        let process: Process = .init()
+        process.executableURL = Engine.directory.appending(path: "wine/bin/wineserver")
+        process.arguments = ["-w"]
+        process.environment = constructEnvironment(
+            with: containerURL,
+            additionalVariables: (try? assembleEnvironmentVariables(forContainerAtURL: containerURL)) ?? [:]
+        )
+
+        return await withCheckedContinuation { continuation in
+            let finished: OSAllocatedUnfairLock<Bool> = .init(initialState: false)
+
+            @Sendable func finish(_ idle: Bool) {
+                guard finished.withLock({ let first = !$0; $0 = true; return first }) else { return }
+                if !idle { process.terminate() }
+                continuation.resume(returning: idle)
+            }
+
+            process.terminationHandler = { _ in finish(true) }
+
+            do { try process.run() } catch { return finish(false) }
+
+            Task.detached {
+                try? await Task.sleep(for: .seconds(timeout))
+                finish(false)
+            }
+        }
+    }
+
     static func killAll(at urls: URL...) throws {
+        lastForceStop.withLock { $0 = .now }
+        log.notice("Force-stopping Wine in \(urls.isEmpty ? "all containers" : urls.map(\.lastPathComponent).joined(separator: ", "))")
+
         let process: Process = .init()
         process.executableURL = Engine.directory.appending(path: "wine/bin/wineserver")
         process.arguments = ["-k"]
