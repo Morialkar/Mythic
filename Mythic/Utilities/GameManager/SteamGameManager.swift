@@ -113,7 +113,9 @@ final class SteamGameManager {
             let summary = String(localized: "\(title) stopped right after starting (exit status \(exitStatus), after \(duration) s).")
             let tail = output.split(separator: "\n").suffix(4).joined(separator: "\n")
 
-            return [summary, diagnosis, tail.isEmpty ? nil : String(localized: "Wine reported:") + "\n" + tail]
+            let logLine = String(localized: "Log: \(SteamLaunchLog.summaryURL.prettyPath)")
+
+            return [summary, diagnosis, tail.isEmpty ? nil : String(localized: "Wine reported:") + "\n" + tail, logLine]
                 .compactMap { $0 }
                 .joined(separator: "\n\n")
         }
@@ -144,7 +146,8 @@ final class SteamGameManager {
                 stoppedByMythic
                     ? String(localized: "Mythic force-stopped Wine in that time.")
                     : String(localized: "Mythic did not stop it; the game stopped by itself."),
-                isSteamClientMissing ? String(localized: "This container has no Steam client installed.") : nil
+                isSteamClientMissing ? String(localized: "This container has no Steam client installed.") : nil,
+                String(localized: "Log: \(SteamLaunchLog.summaryURL.prettyPath)")
             ]
             .compactMap { $0 }
             .joined(separator: "\n")
@@ -257,26 +260,38 @@ final class SteamGameManager {
         process.environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: container.url)
         Wine.transformProcess(process, containerURL: containerURL)
 
-        let diagnostics: LaunchDiagnostics = .init()
+        let outputURL = SteamLaunchLog.outputURL(for: title)
+        let outputHandle = try SteamLaunchLog.openOutputFile(for: title)
+        process.standardOutput = outputHandle
+        process.standardError = outputHandle
+
+        SteamLaunchLog.record("Launching \(title): \(executableURL.lastPathComponent) in \(containerURL.lastPathComponent); Wine output: \(outputURL.prettyPath)")
         let startedAt: Date = .now
 
         try await withTaskCancellationHandler {
-            // Streamed rather than fire-and-forget: when a game fails to start it explains itself
-            // on stderr, and that explanation was previously discarded.
-            try await process.runStreamed(throwsOnChunkError: false) { chunk in
-                diagnostics.record(chunk.output)
-                return nil
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                process.terminationHandler = { _ in continuation.resume() }
+
+                do {
+                    try process.run()
+                } catch {
+                    process.terminationHandler = nil
+                    continuation.resume(throwing: error)
+                }
             }
         } onCancel: {
             process.interrupt()
         }
 
+        try? outputHandle.close()
+        let outputTail = SteamLaunchLog.tail(of: outputURL, lines: 40)
+
         let duration = Date.now.timeIntervalSince(startedAt)
-        log.notice("\(title) exited with status \(process.terminationStatus) after \(duration, format: .fixed(precision: 1)) s")
+        SteamLaunchLog.record("\(title): first process exited with status \(process.terminationStatus) after \(duration.formatted(.number.precision(.fractionLength(1)))) s")
 
         // A clean exit is usually a launcher handing off to the game, not a failure to start.
         // A launcher exits cleanly after starting the game, so look at what is left running instead.
-        if process.terminationStatus == 0, duration < sessionWatchLimit {
+        if process.terminationStatus == 0 {
             let handoffAt = Date.now
             let stillRunning = !(await Wine.waitUntilIdle(containerURL: containerURL, timeout: sessionWatchWindow))
             let idleAfter = Date.now.timeIntervalSince(handoffAt)
@@ -285,7 +300,7 @@ final class SteamGameManager {
             let outcome = stillRunning ? "still running" : "idle after \(idleAfter.formatted(.number.precision(.fractionLength(1)))) s"
             log.notice("\(title) launcher exited after \(duration.formatted(.number.precision(.fractionLength(1)))) s; container \(outcome); force-stopped by Mythic: \(stoppedByMythic)")
 
-            if !stillRunning {
+            if !stillRunning, duration < sessionWatchLimit {
                 throw SessionEndedError(
                     title: title,
                     launcherDuration: duration,
@@ -297,11 +312,11 @@ final class SteamGameManager {
         }
 
         guard duration >= immediateExitThreshold || process.terminationStatus == 0 else {
-            log.error("\(title) closed immediately; output tail:\n\(diagnostics.tail, privacy: .public)")
+            SteamLaunchLog.record("\(title): closed immediately; output tail:\n\(outputTail)")
             throw ImmediateExitError(
                 title: title,
                 isSteamClientMissing: !containerHasSteamClient(at: containerURL),
-                output: diagnostics.tail,
+                output: outputTail,
                 exitStatus: process.terminationStatus,
                 duration: duration
             )
@@ -410,24 +425,6 @@ final class SteamGameManager {
             FileManager.default.fileExists(
                 atPath: steamDirectory.appending(path: $0).path(percentEncoded: false)
             )
-        }
-    }
-
-    /// Keeps the tail of a launched process's output, so a failure to start can explain itself.
-    private final class LaunchDiagnostics: Sendable {
-        private static let limit: Int = 40
-
-        private let lines: OSAllocatedUnfairLock<[String]> = .init(initialState: .init())
-
-        func record(_ line: String) {
-            lines.withLock { lines in
-                lines.append(line)
-                if lines.count > Self.limit { lines.removeFirst(lines.count - Self.limit) }
-            }
-        }
-
-        var tail: String {
-            lines.withLock { $0.joined(separator: "\n") }
         }
     }
 

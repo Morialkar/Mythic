@@ -36,7 +36,7 @@ enum SteamClient {
         var errorDescription: String? {
             String(localized: """
                 The Steam client didn't finish signing in within \(waited.formatted(.number.precision(.fractionLength(0)))) s.
-                Its log is at \(logURL.prettyPath).
+                Its output is in \(logURL.prettyPath).
                 """)
         }
     }
@@ -64,7 +64,7 @@ enum SteamClient {
 
     /// Downloads Valve's installer and runs it silently inside the container.
     static func install(in containerURL: URL) async throws {
-        log.notice("Downloading the Steam installer for \(containerURL.lastPathComponent)")
+        SteamLaunchLog.record("Downloading the Steam installer for \(containerURL.lastPathComponent)")
 
         let (downloadedURL, response) = try await URLSession.shared.download(from: installerURL)
         defer { try? FileManager.default.removeItem(at: downloadedURL) }
@@ -89,7 +89,7 @@ enum SteamClient {
         Wine.transformProcess(process, containerURL: containerURL)
 
         let result = try await process.runWrapped()
-        log.notice("Steam installer exited with status \(process.terminationStatus)")
+        SteamLaunchLog.record("Steam installer exited with status \(process.terminationStatus)")
 
         guard isInstalled(in: containerURL) else {
             let output = (result.standardError ?? "").split(separator: "\n").suffix(4).joined(separator: "\n")
@@ -146,7 +146,7 @@ enum SteamClient {
         process.standardError = logHandle
         Wine.transformProcess(process, containerURL: containerURL)
 
-        log.notice("Starting the Steam client (remembered sign-in: \(remembered)); waiting up to \(Int(waited)) s")
+        SteamLaunchLog.record("Starting the Steam client (remembered sign-in: \(remembered)); waiting up to \(Int(waited)) s")
         try process.run()
 
         // The first steam.exe may exit after handing over to the real client, so only the sign-in matters.
@@ -156,7 +156,7 @@ enum SteamClient {
             try await Task.sleep(for: .seconds(3))
 
             if await isSignedIn(in: containerURL) {
-                log.notice("The Steam client is signed in")
+                SteamLaunchLog.record("The Steam client is signed in")
                 return
             }
         }

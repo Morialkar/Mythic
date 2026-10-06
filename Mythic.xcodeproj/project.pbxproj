@@ -17,6 +17,7 @@
 		1FC34523F08207A21A47B3C4 /* ValveDataFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CA8D98C5272EC81E7383FAF /* ValveDataFormat.swift */; };
 		5A1C0DE1A2B3C4D5E6F70822 /* SteamInstallScript.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1C0DE1A2B3C4D5E6F70811 /* SteamInstallScript.swift */; };
 		5A1C0DE1A2B3C4D5E6F70844 /* SteamClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1C0DE1A2B3C4D5E6F70833 /* SteamClient.swift */; };
+		5A1C0DE1A2B3C4D5E6F70866 /* SteamLaunchLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1C0DE1A2B3C4D5E6F70855 /* SteamLaunchLog.swift */; };
 		ED47048247179B6971A267A3 /* SteamCMDOutput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C767C51CB9A3D208CA068D8 /* SteamCMDOutput.swift */; };
 		1217C8A92EADC525003EC8C9 /* SparkleUpdaterDownloadingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1217C8A22EADC525003EC8C9 /* SparkleUpdaterDownloadingView.swift */; };
 		1217C8AA2EADC525003EC8C9 /* SparkleUpdaterSheetViewModifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1217C8A72EADC525003EC8C9 /* SparkleUpdaterSheetViewModifier.swift */; };
@@ -170,6 +171,7 @@
 		1CA8D98C5272EC81E7383FAF /* ValveDataFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ValveDataFormat.swift; sourceTree = "<group>"; };
 		5A1C0DE1A2B3C4D5E6F70811 /* SteamInstallScript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamInstallScript.swift; sourceTree = "<group>"; };
 		5A1C0DE1A2B3C4D5E6F70833 /* SteamClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamClient.swift; sourceTree = "<group>"; };
+		5A1C0DE1A2B3C4D5E6F70855 /* SteamLaunchLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamLaunchLog.swift; sourceTree = "<group>"; };
 		0C767C51CB9A3D208CA068D8 /* SteamCMDOutput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamCMDOutput.swift; sourceTree = "<group>"; };
 		1217C8A12EADC525003EC8C9 /* SparkleUpdaterCheckingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparkleUpdaterCheckingView.swift; sourceTree = "<group>"; };
 		1217C8A22EADC525003EC8C9 /* SparkleUpdaterDownloadingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparkleUpdaterDownloadingView.swift; sourceTree = "<group>"; };
@@ -330,6 +332,7 @@
 				1CA8D98C5272EC81E7383FAF /* ValveDataFormat.swift */,
 				5A1C0DE1A2B3C4D5E6F70811 /* SteamInstallScript.swift */,
 				5A1C0DE1A2B3C4D5E6F70833 /* SteamClient.swift */,
+				5A1C0DE1A2B3C4D5E6F70855 /* SteamLaunchLog.swift */,
 				0C767C51CB9A3D208CA068D8 /* SteamCMDOutput.swift */,
 			);
 			path = Steam;
@@ -849,6 +852,7 @@
 				1FC34523F08207A21A47B3C4 /* ValveDataFormat.swift in Sources */,
 				5A1C0DE1A2B3C4D5E6F70822 /* SteamInstallScript.swift in Sources */,
 				5A1C0DE1A2B3C4D5E6F70844 /* SteamClient.swift in Sources */,
+				5A1C0DE1A2B3C4D5E6F70866 /* SteamLaunchLog.swift in Sources */,
 				ED47048247179B6971A267A3 /* SteamCMDOutput.swift in Sources */,
 				6A2935592BFCFAFD0035CE4B /* ContainerCreationView.swift in Sources */,
 				6A1192852EC8D4FD005A3E05 /* GameManager.swift in Sources */,
