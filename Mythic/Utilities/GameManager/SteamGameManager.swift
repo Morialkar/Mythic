@@ -558,7 +558,7 @@ final class SteamGameManager {
                           await confirmSteamClientInstall(for: title) else { throw error }
 
                     try await SteamClient.install(in: containerURL)
-                    try await SteamClient.ensureRunning(in: containerURL)
+                    try await SteamClient.ensureRunning(in: containerURL, interactive: true)
 
                     try await runWindowsTitle(title: title, location: location, executableURL: executableURL,
                                               arguments: arguments, containerURL: containerURL)

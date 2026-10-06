@@ -122,9 +122,13 @@ enum SteamClient {
     /**
      Starts the client if needed and waits for it to be signed in.
 
-     The first run shows the Steam window so the user can sign in; after that it starts silently.
+     - Parameter interactive: `true` when the user is being walked through setting the client up: it starts with its
+       window shown, so they can sign in, and the wait is long. Otherwise this runs on every launch of a Steam
+       title, where it must never hold the game up for long or fail it: the client is only started if a sign-in
+       was remembered (there is nothing useful to start otherwise), silently, and the wait is short. A title that
+       genuinely needs the client reports that itself.
      */
-    static func ensureRunning(in containerURL: URL) async throws {
+    static func ensureRunning(in containerURL: URL, interactive: Bool = false) async throws {
         guard let executable = executableURL(in: containerURL) else {
             throw InstallError(reason: String(localized: "The Steam client isn't installed in this container."))
         }
@@ -132,7 +136,13 @@ enum SteamClient {
         if await isSignedIn(in: containerURL) { return }
 
         let remembered = await hasRememberedLogin(in: containerURL)
-        let waited: TimeInterval = remembered ? 120 : 600
+
+        if !interactive, !remembered {
+            SteamLaunchLog.record("The Steam client is installed in \(containerURL.lastPathComponent) but not signed in; not starting it for this launch")
+            return
+        }
+
+        let waited: TimeInterval = interactive ? (remembered ? 120 : 600) : 45
 
         try? FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: logURL.path(percentEncoded: false), contents: nil)
@@ -146,7 +156,7 @@ enum SteamClient {
         process.standardError = logHandle
         Wine.transformProcess(process, containerURL: containerURL)
 
-        SteamLaunchLog.record("Starting the Steam client (remembered sign-in: \(remembered)); waiting up to \(Int(waited)) s")
+        SteamLaunchLog.record("Starting the Steam client (remembered sign-in: \(remembered), interactive: \(interactive)); waiting up to \(Int(waited)) s")
         try process.run()
 
         // The first steam.exe may exit after handing over to the real client, so only the sign-in matters.
@@ -161,6 +171,7 @@ enum SteamClient {
             }
         }
 
-        throw SignInTimeoutError(waited: waited)
+        SteamLaunchLog.record("The Steam client wasn't signed in after \(Int(waited)) s")
+        if interactive { throw SignInTimeoutError(waited: waited) }
     }
 }
