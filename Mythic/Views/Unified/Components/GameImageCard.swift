@@ -73,23 +73,26 @@ struct GameImageCard: View {
                         .frame(width: geometry.size.width,
                                height: geometry.size.height)
                     case .failure(let error):
-                        ContentUnavailableView(
-                            "Unable to load the image.",
-                            systemImage: "photo.badge.exclamationmark",
-                            description: .init(error.localizedDescription)
-                        )
+                        // The game's own icon beats an error message, when there is one.
+                        Group {
+                            if let game, game.isFallbackImageAvailable {
+                                GameImageCard.FallbackGameImageCard(game: .constant(game), withBlur: withBlur)
+                                    .padding()
+                            } else {
+                                ImageUnavailableView(title: "Unable to load the image.", reason: error.localizedDescription)
+                            }
+                        }
+                        .frame(width: geometry.size.width, height: geometry.size.height)
                         .onAppear {
                             withAnimation { isImageEmpty = true }
                         }
                     @unknown default:
-                        ContentUnavailableView(
-                            "Unable to load the image.",
-                            systemImage: "photo.badge.exclamationmark",
-                            description: .init("Please check your internet connection, and try again.")
-                        )
-                        .onAppear {
-                            withAnimation { isImageEmpty = true }
-                        }
+                        ImageUnavailableView(title: "Unable to load the image.",
+                                             reason: "Please check your internet connection, and try again.")
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                            .onAppear {
+                                withAnimation { isImageEmpty = true }
+                            }
                     }
                 }
                 .frame(width: geometry.size.width,
@@ -100,12 +103,9 @@ struct GameImageCard: View {
                     .frame(width: geometry.size.width,
                            height: geometry.size.height)
             } else {
-                ContentUnavailableView(
-                    "Image Unavailable",
-                    systemImage: "photo.badge.exclamationmark",
-                    description: .init("""
-                    This game doesn't have an image that Mythic can display in this style.
-                    """)
+                ImageUnavailableView(
+                    title: "Image Unavailable",
+                    reason: String(localized: "This game doesn't have an image that Mythic can display in this style.")
                 )
                 .frame(width: geometry.size.width,
                        height: geometry.size.height)
@@ -113,6 +113,28 @@ struct GameImageCard: View {
         }
         .background(.quinary)
         .clipShape(.rect(cornerRadius: 20))
+    }
+}
+
+/// A short, readable stand-in for an image that isn't there. The reason goes in the tooltip: system error
+/// descriptions run to several lines, which is far too much for the space on a card.
+private struct ImageUnavailableView: View {
+    var title: LocalizedStringKey
+    var reason: String?
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Image(systemName: "photo.badge.exclamationmark")
+                .font(.title2)
+
+            Text(title)
+                .font(.footnote)
+                .multilineTextAlignment(.center)
+                .lineLimit(3)
+        }
+        .foregroundStyle(.secondary)
+        .padding()
+        .help(reason ?? "")
     }
 }
 

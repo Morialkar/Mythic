@@ -441,28 +441,42 @@ extension GameCard {
 
         var body: some View {
             HStack {
+                // Two lines, and a little shrinking, before truncating: a card is narrow, and the title is what
+                // identifies the game. The line is sized to its text, so the title is never squeezed by what's below.
                 Text(game.title)
                     .font(font)
                     .bold()
                     .truncationMode(.tail)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 if game.isFavourited {
                     Image(systemName: "star.fill")
                 }
             }
 
+            // The badges and the id are secondary: when they don't fit whole they are left out, not cut to "S…".
             if withSubscriptedInfo {
-                HStack {
-                    GameCard.SubscriptedInfoView(game: $game)
-                        .lineLimit(1)
+                ViewThatFits(in: .horizontal) {
+                    HStack {
+                        GameCard.SubscriptedInfoView(game: $game)
+                    }
+                    .lineLimit(1)
+
+                    EmptyView()
                 }
             }
 
 #if DEBUG
-                                Text("(\(game.id))")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
+            ViewThatFits(in: .horizontal) {
+                Text("(\(game.id))")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                EmptyView()
+            }
 #endif // DEBUG
         }
     }
